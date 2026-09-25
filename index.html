@@ -570,7 +570,17 @@
   const SESSIONS=ALL.filter(k=>MAP[k].entry.type!=='riposo');
 
   /* ---------- pace / hr helpers ---------- */
-  const p2s=s=>{const m=/^(\d{1,2}):([0-5]\d)$/.exec(String(s||'').trim());return m?+m[1]*60+ +m[2]:null;};
+  /* Accetta 5:35, 5.35, 5,35 e anche solo cifre (535 -> 5:35, 1005 -> 10:05).
+     Serve perché il tastierino numerico di iOS non ha i due punti. */
+  function normPace(v){
+    const t=String(v==null?'':v).trim();
+    if(!t)return null;
+    let m=/^(\d{1,2})[:.,](\d{2})$/.exec(t);
+    if(!m){const d=t.replace(/\D/g,'');if(d.length===3||d.length===4)m=[d,d.slice(0,-2),d.slice(-2)];}
+    if(!m||+m[2]>59)return null;
+    return (+m[1])+':'+m[2];
+  }
+  const p2s=s=>{const n=normPace(s);if(!n)return null;const q=n.split(':');return +q[0]*60+ +q[1];};
   const s2p=v=>Math.floor(v/60)+':'+pad(Math.round(v%60));
   function rng(str){
     if(!str)return null;
@@ -605,9 +615,23 @@
   /* ---------- state ---------- */
   let log={}, curWeek=0, openDay=null;
 
+  /* Sedute riferite in chat: unite al diario solo per le date ancora vuote,
+     così non sovrascrivono mai quello che hai inserito tu. */
+  const SEED={
+    '2026-09-23':{done:true,km:5,pace:'6:14',hr:135,
+      note:'Recupero spostato da martedì (martedì 1h30 di padel). 35 m di dislivello, Valdagno.'}
+  };
+
   async function load(){
     try{const r=await window.storage.get('training-log',false);if(r&&r.value)log=JSON.parse(r.value);}
     catch(e){log={};}
+    let changed=false;
+    Object.keys(SEED).forEach(k=>{if(!log[k]){log[k]=SEED[k];changed=true;}});
+    Object.keys(log).forEach(k=>{
+      const e=log[k];
+      if(e&&e.pace){const n=normPace(e.pace);if(n&&n!==e.pace){e.pace=n;changed=true;}}
+    });
+    if(changed)await save();
   }
   async function save(){
     try{await window.storage.set('training-log',JSON.stringify(log),false);}
@@ -690,7 +714,8 @@
        '<div class="f"><label for="iHr">FC media</label><input id="iHr" type="text" inputmode="numeric" value="'+(d.hr!=null?d.hr:'')+'"></div>'+
        '</div>'+
        '<textarea id="iNote" placeholder="Note (facoltativo)">'+(d.note||'')+'</textarea>'+
-       '<button class="btn go wide" id="bSave">Salva i dati</button>';
+       '<button class="btn go wide" id="bSave">Salva i dati</button>'+
+       '<div class="msg" id="iMsg" style="color:var(--bad)"></div>';
     const fl=flags(e,(d.km!=null||d.pace||d.hr!=null)?d:null);
     if(fl.length)h+='<div class="flags">'+fl.map(f=>'<span class="flag '+f[0]+'">'+f[1]+'</span>').join('')+'</div>';
     h+='<label class="done"><input type="checkbox" id="cDone" '+(did(k)?'checked':'')+'> Seduta completata</label>';
@@ -702,11 +727,22 @@
     document.getElementById('bSave').onclick=()=>{
       const km=parseFloat(String(document.getElementById('iKm').value).replace(',','.'));
       const hr=parseInt(document.getElementById('iHr').value,10);
-      const pc=document.getElementById('iPace').value.trim();
+      const raw=document.getElementById('iPace').value.trim();
+      const pc=normPace(raw);
+      if(raw&&!pc){
+        document.getElementById('iMsg').textContent='Ritmo non valido: scrivi minuti e secondi, per esempio 535 per 5:35.';
+        document.getElementById('iPace').focus();
+        return;
+      }
       const nt=document.getElementById('iNote').value.trim();
       setData(k,{km:isNaN(km)?null:km,pace:pc||null,hr:isNaN(hr)?null:hr,note:nt||null});
     };
     document.getElementById('cDone').onchange=ev=>setDone(k,ev.target.checked);
+    const ip=document.getElementById('iPace');
+    ip.addEventListener('input',()=>{
+      const d=ip.value.replace(/\D/g,'').slice(0,4);
+      ip.value=d.length>=3?d.slice(0,-2)+':'+d.slice(-2):d;
+    });
   }
 
   /* ---------- PIANO ---------- */
